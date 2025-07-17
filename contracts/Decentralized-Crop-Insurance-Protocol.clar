@@ -6,13 +6,16 @@
 (define-data-var insurance-pool uint u0)
 (define-data-var total-farmers uint u0)
 (define-data-var active-claims uint u0)
+(define-data-var premium-adjustment-period uint u100)
 
 (define-map farmers 
   principal 
   {contribution: uint, 
    active: bool,
    last-claim: uint,
-   location: (string-ascii 34)})
+   location: (string-ascii 34),
+   claims-count: uint,
+   premium-rate: uint})
 
 (define-map claims 
   uint 
@@ -32,7 +35,9 @@
           {contribution: min-contribution,
            active: true,
            last-claim: u0,
-           location: location})
+           location: location,
+           claims-count: u0,
+           premium-rate: u100})
         (var-set total-farmers (+ (var-get total-farmers) u1))
         (var-set insurance-pool (+ (var-get insurance-pool) min-contribution))
         (ok true)))))
@@ -65,6 +70,10 @@
            status: "pending",
            weather-data: weather-data,
            timestamp: stacks-block-height})
+        (map-set farmers 
+          tx-sender 
+          (merge (unwrap-panic farmer-data)
+                 {claims-count: (+ (get claims-count (unwrap-panic farmer-data)) u1)}))
         (ok (var-get active-claims)))
       (err u3))))
 
@@ -107,3 +116,46 @@
 
 (define-read-only (get-claim-info (claim-id uint))
   (ok (map-get? claims claim-id)))
+
+(define-read-only (calculate-premium (farmer principal))
+  (match (map-get? farmers farmer)
+    farmer-data
+    (let ((claims-count (get claims-count farmer-data))
+          (base-rate u100))
+      (if (> claims-count u3)
+        (+ base-rate (* (- claims-count u3) u20))
+        (if (and (> claims-count u0) (<= claims-count u1))
+          (- base-rate u10)
+          base-rate)))
+    u100))
+
+(define-public (adjust-premium (farmer principal))
+  (match (map-get? farmers farmer)
+    farmer-data
+    (let ((current-block stacks-block-height)
+          (new-premium-rate (calculate-premium farmer)))
+      (if (> (- current-block (get last-claim farmer-data)) (var-get premium-adjustment-period))
+        (begin
+          (map-set farmers 
+            farmer 
+            (merge farmer-data {premium-rate: new-premium-rate}))
+          (ok new-premium-rate))
+        (err u6)))
+    (err u7)))
+
+(define-public (get-required-contribution (farmer principal))
+  (match (map-get? farmers farmer)
+    farmer-data
+    (let ((premium-rate (get premium-rate farmer-data)))
+      (ok (/ (* min-contribution premium-rate) u100)))
+    (ok min-contribution)))
+
+(define-read-only (get-farmer-risk-score (farmer principal))
+  (match (map-get? farmers farmer)
+    farmer-data
+    (let ((claims-count (get claims-count farmer-data))
+          (contribution (get contribution farmer-data)))
+      (if (> claims-count u0)
+        (ok (/ contribution claims-count))
+        (ok u0)))
+    (err u8)))
