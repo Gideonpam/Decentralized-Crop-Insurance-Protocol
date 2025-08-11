@@ -7,6 +7,9 @@
 (define-data-var total-farmers uint u0)
 (define-data-var active-claims uint u0)
 (define-data-var premium-adjustment-period uint u100)
+(define-data-var auto-approval-threshold uint u3)
+(define-data-var total-auto-approvals uint u0)
+(define-data-var total-verifications uint u0)
 
 (define-map farmers 
   principal 
@@ -23,7 +26,9 @@
    amount: uint,
    status: (string-ascii 8),
    weather-data: (string-ascii 34),
-   timestamp: uint})
+   timestamp: uint,
+   auto-verified: bool,
+   weather-severity: uint})
 
 (define-public (join-pool (location (string-ascii 34)))
   (let ((current-contribution (default-to u0 (get contribution (map-get? farmers tx-sender)))))
@@ -56,25 +61,36 @@
       (err u2))))
 
 (define-public (submit-claim (amount uint) (weather-data (string-ascii 34)))
-  (let ((farmer-data (map-get? farmers tx-sender)))
+  (let ((farmer-data (map-get? farmers tx-sender))
+        (weather-severity (extract-weather-severity weather-data)))
     (if (and 
           (is-some farmer-data)
           (<= amount claim-threshold)
           (get active (unwrap-panic farmer-data)))
       (begin
         (var-set active-claims (+ (var-get active-claims) u1))
-        (map-set claims 
-          (var-get active-claims)
-          {farmer: tx-sender,
-           amount: amount,
-           status: "pending",
-           weather-data: weather-data,
-           timestamp: stacks-block-height})
-        (map-set farmers 
-          tx-sender 
-          (merge (unwrap-panic farmer-data)
-                 {claims-count: (+ (get claims-count (unwrap-panic farmer-data)) u1)}))
-        (ok (var-get active-claims)))
+        (let ((claim-id (var-get active-claims))
+              (should-auto-approve (>= weather-severity (var-get auto-approval-threshold))))
+          (map-set claims 
+            claim-id
+            {farmer: tx-sender,
+             amount: amount,
+             status: (if should-auto-approve "approved" "pending"),
+             weather-data: weather-data,
+             timestamp: stacks-block-height,
+             auto-verified: should-auto-approve,
+             weather-severity: weather-severity})
+          (if should-auto-approve
+            (begin
+              (var-set insurance-pool (- (var-get insurance-pool) amount))
+              (var-set total-auto-approvals (+ (var-get total-auto-approvals) u1)))
+            true)
+          (var-set total-verifications (+ (var-get total-verifications) u1))
+          (map-set farmers 
+            tx-sender 
+            (merge (unwrap-panic farmer-data)
+                   {claims-count: (+ (get claims-count (unwrap-panic farmer-data)) u1)}))
+          (ok claim-id)))
       (err u3))))
 
 (define-public (process-claim (claim-id uint) (approve bool))
@@ -159,3 +175,57 @@
         (ok (/ contribution claims-count))
         (ok u0)))
     (err u8)))
+
+(define-read-only (extract-weather-severity (weather-data (string-ascii 34)))
+  (let ((first-char (element-at weather-data u0)))
+    (match first-char
+      char-val
+      (if (is-eq char-val "5") u5
+        (if (is-eq char-val "4") u4
+          (if (is-eq char-val "3") u3
+            (if (is-eq char-val "2") u2
+              (if (is-eq char-val "1") u1
+                u0)))))
+      u0)))
+
+(define-public (auto-verify-claim (claim-id uint))
+  (match (map-get? claims claim-id)
+    claim-data
+    (let ((weather-severity (get weather-severity claim-data))
+          (current-status (get status claim-data)))
+      (if (and 
+            (is-eq current-status "pending")
+            (>= weather-severity (var-get auto-approval-threshold)))
+        (begin
+          (map-set claims 
+            claim-id 
+            (merge claim-data 
+                   {status: "approved", auto-verified: true}))
+          (var-set insurance-pool (- (var-get insurance-pool) (get amount claim-data)))
+          (var-set total-auto-approvals (+ (var-get total-auto-approvals) u1))
+          (ok true))
+        (err u9)))
+    (err u10)))
+
+(define-public (update-verification-threshold (new-threshold uint))
+  (if (is-eq tx-sender contract-owner)
+    (begin
+      (var-set auto-approval-threshold new-threshold)
+      (ok true))
+    (err u11)))
+
+(define-read-only (get-verification-stats)
+  (ok {total-verifications: (var-get total-verifications),
+       auto-approvals: (var-get total-auto-approvals),
+       threshold: (var-get auto-approval-threshold),
+       approval-rate: (if (> (var-get total-verifications) u0)
+                       (/ (* (var-get total-auto-approvals) u100) (var-get total-verifications))
+                       u0)}))
+
+(define-read-only (check-auto-approval-eligibility (weather-data (string-ascii 34)) (amount uint))
+  (let ((severity (extract-weather-severity weather-data)))
+    (ok {severity: severity,
+         threshold: (var-get auto-approval-threshold),
+         eligible: (and 
+                     (>= severity (var-get auto-approval-threshold))
+                     (<= amount claim-threshold))})))
