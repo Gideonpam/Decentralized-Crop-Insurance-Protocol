@@ -20,32 +20,49 @@
    claims-count: uint,
    premium-rate: uint})
 
-(define-map claims 
-  uint 
-  {farmer: principal,
-   amount: uint,
-   status: (string-ascii 8),
-   weather-data: (string-ascii 34),
-   timestamp: uint,
-   auto-verified: bool,
-   weather-severity: uint})
+(define-map claims
+   uint
+   {farmer: principal,
+    amount: uint,
+    status: (string-ascii 8),
+    weather-data: (string-ascii 34),
+    timestamp: uint,
+    auto-verified: bool,
+    weather-severity: uint})
 
-(define-public (join-pool (location (string-ascii 34)))
-  (let ((current-contribution (default-to u0 (get contribution (map-get? farmers tx-sender)))))
-    (if (is-some (map-get? farmers tx-sender))
-      (err u1)
-      (begin
-        (map-set farmers 
-          tx-sender 
-          {contribution: min-contribution,
-           active: true,
-           last-claim: u0,
-           location: location,
-           claims-count: u0,
-           premium-rate: u100})
-        (var-set total-farmers (+ (var-get total-farmers) u1))
-        (var-set insurance-pool (+ (var-get insurance-pool) min-contribution))
-        (ok true)))))
+(define-constant referral-bonus u50000)
+
+(define-map referrals principal principal)
+
+(define-public (join-pool (location (string-ascii 34)) (referrer (optional principal)))
+   (let ((current-contribution (default-to u0 (get contribution (map-get? farmers tx-sender)))))
+     (if (is-some (map-get? farmers tx-sender))
+       (err u1)
+       (begin
+         (map-set farmers
+           tx-sender
+           {contribution: min-contribution,
+            active: true,
+            last-claim: u0,
+            location: location,
+            claims-count: u0,
+            premium-rate: u100})
+         (var-set total-farmers (+ (var-get total-farmers) u1))
+         (var-set insurance-pool (+ (var-get insurance-pool) min-contribution))
+         (match referrer
+           ref
+           (if (and (is-some (map-get? farmers ref)) (get active (unwrap-panic (map-get? farmers ref))))
+             (begin
+               (map-set referrals tx-sender ref)
+               (let ((referrer-data (unwrap-panic (map-get? farmers ref))))
+                 (if (>= (var-get insurance-pool) (+ pool-minimum referral-bonus))
+                   (begin
+                     (map-set farmers ref (merge referrer-data {contribution: (+ (get contribution referrer-data) referral-bonus)}))
+                     (var-set insurance-pool (- (var-get insurance-pool) referral-bonus)))
+                   true)))
+             true)
+           true)
+         (ok true)))))
 
 (define-public (contribute (amount uint))
   (let ((farmer-data (map-get? farmers tx-sender)))
@@ -226,6 +243,75 @@
   (let ((severity (extract-weather-severity weather-data)))
     (ok {severity: severity,
          threshold: (var-get auto-approval-threshold),
-         eligible: (and 
+         eligible: (and
                      (>= severity (var-get auto-approval-threshold))
                      (<= amount claim-threshold))})))
+
+(define-data-var proposal-counter uint u0)
+
+(define-map proposals
+  uint
+  {proposer: principal,
+   proposed-threshold: uint,
+   votes-for: uint,
+   votes-against: uint,
+   end-block: uint})
+
+(define-map votes
+  {proposal-id: uint, voter: principal}
+  bool)
+
+(define-constant voting-period u100)
+
+(define-public (propose-threshold-change (new-threshold uint))
+  (let ((farmer-data (map-get? farmers tx-sender)))
+    (if (and (is-some farmer-data) (get active (unwrap-panic farmer-data)))
+      (let ((proposal-id (+ (var-get proposal-counter) u1)))
+        (var-set proposal-counter proposal-id)
+        (map-set proposals
+          proposal-id
+          {proposer: tx-sender,
+           proposed-threshold: new-threshold,
+           votes-for: u0,
+           votes-against: u0,
+           end-block: (+ stacks-block-height voting-period)})
+        (ok proposal-id))
+      (err u12))))
+
+(define-public (vote-on-proposal (proposal-id uint) (vote bool))
+  (let ((proposal-data (map-get? proposals proposal-id))
+        (farmer-data (map-get? farmers tx-sender))
+        (vote-key {proposal-id: proposal-id, voter: tx-sender}))
+    (if (and (is-some proposal-data)
+             (is-some farmer-data)
+             (get active (unwrap-panic farmer-data))
+             (is-none (map-get? votes vote-key))
+             (< stacks-block-height (get end-block (unwrap-panic proposal-data))))
+      (let ((current-data (unwrap-panic proposal-data))
+            (current-for (get votes-for current-data))
+            (current-against (get votes-against current-data)))
+        (begin
+          (map-set votes vote-key true)
+          (map-set proposals
+            proposal-id
+            (merge current-data
+                   {votes-for: (if vote (+ current-for u1) current-for),
+                    votes-against: (if vote current-against (+ current-against u1))}))
+          (ok true)))
+      (err u13))))
+
+(define-public (execute-proposal (proposal-id uint))
+  (let ((proposal-data (map-get? proposals proposal-id)))
+    (if (and (is-some proposal-data)
+             (>= stacks-block-height (get end-block (unwrap-panic proposal-data))))
+      (let ((votes-for (get votes-for (unwrap-panic proposal-data)))
+            (votes-against (get votes-against (unwrap-panic proposal-data))))
+        (if (> votes-for votes-against)
+          (begin
+            (var-set auto-approval-threshold (get proposed-threshold (unwrap-panic proposal-data)))
+            (ok true))
+          (ok false)))
+      (err u14))))
+
+(define-read-only (get-proposal-info (proposal-id uint))
+  (ok (map-get? proposals proposal-id)))
