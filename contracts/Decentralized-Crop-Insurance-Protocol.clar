@@ -315,3 +315,67 @@
 
 (define-read-only (get-proposal-info (proposal-id uint))
   (ok (map-get? proposals proposal-id)))
+
+(define-read-only (get-farmer-analytics (farmer principal))
+  (match (map-get? farmers farmer)
+    farmer-data
+    (let ((contribution (get contribution farmer-data))
+          (claims-count (get claims-count farmer-data))
+          (premium-rate (get premium-rate farmer-data))
+          (active-status (get active farmer-data))
+          (risk-score (get-farmer-risk-score farmer))
+          (success-rate (get-claim-success-rate farmer)))
+      (ok {contribution: contribution,
+           claims-count: claims-count,
+           premium-rate: premium-rate,
+           active: active-status,
+           risk-score: risk-score,
+           success-rate: success-rate,
+           total-pool-share: (if (> (var-get insurance-pool) u0)
+                               (/ (* contribution u100) (var-get insurance-pool))
+                               u0)}))
+    (err u18)))
+
+(define-read-only (get-contribution-history (farmer principal))
+  (match (map-get? farmers farmer)
+    farmer-data
+    (let ((contribution (get contribution farmer-data))
+          (min-contrib min-contribution))
+      (ok {current-contribution: contribution,
+           minimum-required: min-contrib,
+           additional-contributions: (if (> contribution min-contrib)
+                                       (- contribution min-contrib)
+                                       u0),
+           contribution-ratio: (if (> contribution u0)
+                                 (/ (* min-contrib u100) contribution)
+                                 u0)}))
+    (err u19)))
+
+(define-read-only (get-claim-success-rate (farmer principal))
+  (match (map-get? farmers farmer)
+    farmer-data
+    (let ((claims-count (get claims-count farmer-data)))
+      (if (> claims-count u0)
+        (let ((approved-claims u0)
+              (total-claims claims-count))
+          (ok (/ (* approved-claims u100) total-claims)))
+        (ok u0)))
+    (err u20)))
+
+(define-read-only (get-risk-profile (farmer principal))
+  (match (map-get? farmers farmer)
+    farmer-data
+    (let ((contribution (get contribution farmer-data))
+          (claims-count (get claims-count farmer-data))
+          (premium-rate (get premium-rate farmer-data))
+          (pool-total (var-get insurance-pool)))
+      (ok {contribution-level: (if (>= contribution (* min-contribution u5)) "high"
+                                  (if (>= contribution (* min-contribution u2)) "medium" "low")),
+           claim-frequency: (if (> claims-count u5) "high"
+                               (if (> claims-count u2) "medium" "low")),
+           premium-tier: (if (> premium-rate u120) "high"
+                            (if (> premium-rate u100) "medium" "low")),
+           pool-percentage: (if (> pool-total u0)
+                              (/ (* contribution u100) pool-total)
+                              u0)}))
+    (err u21)))

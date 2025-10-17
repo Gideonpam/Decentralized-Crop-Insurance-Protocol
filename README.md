@@ -88,3 +88,54 @@ Farmers can now refer new members to the insurance pool and earn bonuses upon su
 ```bash
 clarinet contract call join-pool location="FARM-002" referrer=ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
 ```
+
+## 🔄 Emergency Pool Pause Mechanism
+
+Introducing a critical safety feature that allows the contract owner to temporarily halt all pool operations during emergencies, ensuring protocol stability and protecting participants from potential risks.
+
+### Emergency Pause Workflow
+1. Contract owner can activate emergency pause when critical issues are detected
+2. All contribution, claim submission, and withdrawal functions are suspended
+3. Pool status remains readable for transparency
+4. Owner can resume operations once issues are resolved
+5. Pause state is tracked on-chain for auditability
+
+### New Functions
+- `pause-pool`: Emergency pause activation (owner only)
+- `resume-pool`: Resume normal operations (owner only)
+- `is-pool-paused`: Check current pause status
+
+### Example Usage
+```bash
+clarinet contract call pause-pool
+```
+
+```bash
+clarinet contract call resume-pool
+```
+
+## 📊 Farmer Performance Analytics Dashboard
+
+Empowering farmers with comprehensive performance insights through an advanced analytics system that tracks contribution patterns, claim histories, and risk profiles to optimize insurance strategies and decision-making.
+
+### Analytics Dashboard Workflow
+1. Farmers can access detailed performance metrics anytime
+2. System calculates contribution efficiency and claim success rates
+3. Risk scoring helps farmers understand their insurance positioning
+4. Historical data enables better planning for future crop seasons
+5. Analytics drive personalized premium adjustments and recommendations
+
+### New Functions
+- `get-farmer-analytics`: Retrieve comprehensive farmer performance data
+- `get-contribution-history`: View contribution patterns over time
+- `get-claim-success-rate`: Calculate claim approval percentages
+- `get-risk-profile`: Assess farmer's risk positioning in the pool
+
+### Example Usage
+```bash
+clarinet contract call get-farmer-analytics farmer=ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
+```
+
+```bash
+clarinet contract call get-claim-success-rate farmer=ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
+```
