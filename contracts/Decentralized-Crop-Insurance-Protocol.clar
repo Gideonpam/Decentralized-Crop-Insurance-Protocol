@@ -363,19 +363,95 @@
     (err u20)))
 
 (define-read-only (get-risk-profile (farmer principal))
-  (match (map-get? farmers farmer)
-    farmer-data
-    (let ((contribution (get contribution farmer-data))
-          (claims-count (get claims-count farmer-data))
-          (premium-rate (get premium-rate farmer-data))
-          (pool-total (var-get insurance-pool)))
-      (ok {contribution-level: (if (>= contribution (* min-contribution u5)) "high"
-                                  (if (>= contribution (* min-contribution u2)) "medium" "low")),
-           claim-frequency: (if (> claims-count u5) "high"
-                               (if (> claims-count u2) "medium" "low")),
-           premium-tier: (if (> premium-rate u120) "high"
-                            (if (> premium-rate u100) "medium" "low")),
-           pool-percentage: (if (> pool-total u0)
-                              (/ (* contribution u100) pool-total)
-                              u0)}))
-    (err u21)))
+   (match (map-get? farmers farmer)
+     farmer-data
+     (let ((contribution (get contribution farmer-data))
+           (claims-count (get claims-count farmer-data))
+           (premium-rate (get premium-rate farmer-data))
+           (pool-total (var-get insurance-pool)))
+       (ok {contribution-level: (if (>= contribution (* min-contribution u5)) "high"
+                                   (if (>= contribution (* min-contribution u2)) "medium" "low")),
+            claim-frequency: (if (> claims-count u5) "high"
+                                (if (> claims-count u2) "medium" "low")),
+            premium-tier: (if (> premium-rate u120) "high"
+                             (if (> premium-rate u100) "medium" "low")),
+            pool-percentage: (if (> pool-total u0)
+                               (/ (* contribution u100) pool-total)
+                               u0)}))
+     (err u21)))
+
+(define-data-var dispute-counter uint u0)
+
+(define-map disputes
+  uint
+  {claim-id: uint,
+   proposer: principal,
+   votes-for: uint,
+   votes-against: uint,
+   end-block: uint})
+
+(define-map dispute-votes
+  {dispute-id: uint, voter: principal}
+  bool)
+
+(define-constant dispute-voting-period u100)
+
+(define-public (dispute-claim (claim-id uint))
+  (let ((claim-data (map-get? claims claim-id))
+        (farmer-data (map-get? farmers tx-sender)))
+    (if (and (is-some claim-data)
+             (is-some farmer-data)
+             (is-eq (get farmer (unwrap-panic claim-data)) tx-sender)
+             (is-eq (get status (unwrap-panic claim-data)) "rejected"))
+      (let ((dispute-id (+ (var-get dispute-counter) u1)))
+        (var-set dispute-counter dispute-id)
+        (map-set disputes
+          dispute-id
+          {claim-id: claim-id,
+           proposer: tx-sender,
+           votes-for: u0,
+           votes-against: u0,
+           end-block: (+ stacks-block-height dispute-voting-period)})
+        (ok dispute-id))
+      (err u22))))
+
+(define-public (vote-on-dispute (dispute-id uint) (vote bool))
+  (let ((dispute-data (map-get? disputes dispute-id))
+        (farmer-data (map-get? farmers tx-sender))
+        (vote-key {dispute-id: dispute-id, voter: tx-sender}))
+    (if (and (is-some dispute-data)
+             (is-some farmer-data)
+             (get active (unwrap-panic farmer-data))
+             (is-none (map-get? dispute-votes vote-key))
+             (< stacks-block-height (get end-block (unwrap-panic dispute-data))))
+      (let ((current-data (unwrap-panic dispute-data))
+            (current-for (get votes-for current-data))
+            (current-against (get votes-against current-data)))
+        (begin
+          (map-set dispute-votes vote-key true)
+          (map-set disputes
+            dispute-id
+            (merge current-data
+                   {votes-for: (if vote (+ current-for u1) current-for),
+                    votes-against: (if vote current-against (+ current-against u1))}))
+          (ok true)))
+      (err u23))))
+
+(define-public (resolve-dispute (dispute-id uint))
+  (let ((dispute-data (map-get? disputes dispute-id)))
+    (if (and (is-some dispute-data)
+             (>= stacks-block-height (get end-block (unwrap-panic dispute-data))))
+      (let ((votes-for (get votes-for (unwrap-panic dispute-data)))
+            (votes-against (get votes-against (unwrap-panic dispute-data)))
+            (claim-id (get claim-id (unwrap-panic dispute-data))))
+        (if (> votes-for votes-against)
+          (let ((claim-data (unwrap-panic (map-get? claims claim-id))))
+            (begin
+              (var-set insurance-pool (- (var-get insurance-pool) (get amount claim-data)))
+              (map-set claims claim-id (merge claim-data {status: "approved"}))
+              (ok true)))
+          (ok false)))
+      (err u24))))
+
+(define-read-only (get-dispute-info (dispute-id uint))
+  (ok (map-get? disputes dispute-id)))

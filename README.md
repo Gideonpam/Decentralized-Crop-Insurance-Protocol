@@ -138,4 +138,32 @@ clarinet contract call get-farmer-analytics farmer=ST1PQHQKV0RJXZFY1DGX8MNSNYVE3
 
 ```bash
 clarinet contract call get-claim-success-rate farmer=ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
+## ⚖️ Decentralized Claim Dispute Resolution System
+
+Empowering farmers with a transparent, community-driven mechanism to challenge rejected claims, ensuring fairness and accountability in the insurance process through democratic voting.
+
+### Dispute Resolution Workflow
+1. Farmers can dispute rejected claims within the protocol
+2. Community members vote on dispute validity during a 100-block voting period
+3. Disputes with majority approval result in claim reversal and payout
+4. Transparent voting records maintain system integrity
+
+### New Functions
+- `dispute-claim`: Initiate a dispute for a rejected claim
+- `vote-on-dispute`: Cast votes on active disputes
+- `resolve-dispute`: Execute dispute outcome after voting period
+- `get-dispute-info`: Access dispute details and voting status
+
+### Example Usage
+```bash
+clarinet contract call dispute-claim claim-id=u1
+```
+
+```bash
+clarinet contract call vote-on-dispute dispute-id=u1 vote=true
+```
+
+```bash
+clarinet contract call resolve-dispute dispute-id=u1
+```
 ```
